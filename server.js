@@ -31,24 +31,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
-// ── CORS — allow mohamadysons.com to call this API ────────────────
-app.use(cors({
-  origin: function(origin, callback) {
-    const allowed = [
-      'https://mohamadysons.com',
-      'http://mohamadysons.com',
-      'http://localhost:3000',
-      'http://localhost:5500',
-    ];
-    // allow Railway preview URLs and no-origin requests (same-origin / curl)
-    if (!origin || allowed.includes(origin) || origin.endsWith('.railway.app')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS: ' + origin));
-    }
-  },
-  credentials: true
-}));
+// ── CORS — open to all origins ───────────────────────────────────
+app.use(cors());
 
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
