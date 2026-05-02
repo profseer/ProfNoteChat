@@ -199,3 +199,33 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`NoteChat API running on port ${PORT}`));
+
+// ── ADMIN: Clear all messages for a user
+app.delete('/api/admin/users/:id/messages', adminAuth, (req, res) => {
+  db.get('messages').remove({ userId: req.params.id }).write();
+  res.json({ ok: true });
+});
+
+// ── ADMIN: Clear all files for a user
+app.delete('/api/admin/users/:id/files', adminAuth, (req, res) => {
+  const userFiles = db.get('files').filter({ userId: req.params.id }).value();
+  userFiles.forEach(f => {
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, f.storedName)); } catch {}
+  });
+  db.get('files').remove({ userId: req.params.id }).write();
+  db.get('messages').remove({ userId: req.params.id, type: 'file' }).write();
+  res.json({ ok: true });
+});
+
+// ── ADMIN: Broadcast message to all users
+app.post('/api/admin/broadcast', adminAuth, (req, res) => {
+  const { text } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'Text required' });
+  const users = db.get('users').value();
+  const msgs = users.map(u => ({
+    id: require('uuid').v4(), userId: u.id, username: '📢 النظام',
+    text: text.trim(), type: 'text', system: true, createdAt: new Date().toISOString()
+  }));
+  msgs.forEach(m => db.get('messages').push(m).write());
+  res.json({ ok: true, count: msgs.length });
+});
