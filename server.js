@@ -69,14 +69,17 @@ app.post('/api/register', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  const user = db.get('users').find({ email }).value();
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-  if (!user.active) return res.status(403).json({ error: 'Account disabled' });
+  const { username, email, password } = req.body;
+  // Support login by username OR email
+  const loginId = username || email;
+  if (!loginId) return res.status(400).json({ error: 'اسم المستخدم مطلوب' });
+  const user = db.get('users').find(u => u.username === loginId || u.email === loginId).value();
+  if (!user) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+  if (!user.active) return res.status(403).json({ error: 'الحساب معطل' });
   if (!await bcrypt.compare(password, user.password))
-    return res.status(401).json({ error: 'Invalid credentials' });
-  const token = jwt.sign({ id: user.id, username: user.username, email, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, user: { id: user.id, username: user.username, email, isAdmin: user.isAdmin } });
+    return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+  const token = jwt.sign({ id: user.id, username: user.username, email: user.email, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user: { id: user.id, username: user.username, email: user.email, isAdmin: user.isAdmin } });
 });
 
 app.get('/api/me', auth, (req, res) => {
@@ -200,7 +203,7 @@ app.get('/share/:shareId', (req, res) => {
   else if (msg.fileMime?.startsWith('image/') || msg.type === 'drawing') content = `<img src="${msg.fileUrl}" style="max-width:100%;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.12)"/>`;
   else if (msg.type === 'audio') content = `<audio controls src="${msg.fileUrl}" style="width:100%"></audio>`;
   else if (msg.fileUrl) content = `<a href="${msg.fileUrl}" download="${msg.fileName||'file'}" style="display:inline-flex;align-items:center;gap:12px;padding:16px 24px;background:#f0f4ff;border-radius:14px;text-decoration:none;color:#1a2040;font-weight:700">📎 ${msg.fileName||'ملف'}</a>`;
-  res.send(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ملاحظة - NoteChat</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet"/><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Cairo',sans-serif;background:#f0f4ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{background:#fff;border-radius:24px;padding:36px;max-width:600px;width:100%;box-shadow:0 8px 40px rgba(79,124,255,.14)}.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e8edf8}.bic{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3a5fd4,#7c9fff);display:flex;align-items:center;justify-content:center;flex-shrink:0}.bnm{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#1a2040,#4f7cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.meta{font-size:.82rem;color:#8a95b4;margin-bottom:20px}.cnt{margin-bottom:24px}.nt{font-size:1.05rem;line-height:1.75;color:#1a2040;font-weight:500;white-space:pre-wrap}.ft{font-size:.78rem;color:#9aa3be;text-align:center;padding-top:16px;border-top:1px solid #e8edf8}.cta{display:inline-block;margin-top:14px;padding:10px 22px;background:linear-gradient(135deg,#3a5fd4,#4f7cff);color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:.88rem}</style></head><body><div class="card"><div class="brand"><div class="bic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div><span class="bnm">NoteChat</span></div><div class="meta">✍️ ${name} &nbsp;·&nbsp; 📅 ${date}</div><div class="cnt">${content}</div><div class="ft">تمت المشاركة عبر NoteChat<br><a href="/" class="cta">انشئ ملاحظاتك →</a></div></div></body></html>`);
+  res.send(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ملاحظة - ProfNoteChat</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet"/><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Cairo',sans-serif;background:#f0f4ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{background:#fff;border-radius:24px;padding:36px;max-width:600px;width:100%;box-shadow:0 8px 40px rgba(79,124,255,.14)}.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e8edf8}.bic{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3a5fd4,#7c9fff);display:flex;align-items:center;justify-content:center;flex-shrink:0}.bnm{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#1a2040,#4f7cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.meta{font-size:.82rem;color:#8a95b4;margin-bottom:20px}.cnt{margin-bottom:24px}.nt{font-size:1.05rem;line-height:1.75;color:#1a2040;font-weight:500;white-space:pre-wrap}.ft{font-size:.78rem;color:#9aa3be;text-align:center;padding-top:16px;border-top:1px solid #e8edf8}.cta{display:inline-block;margin-top:14px;padding:10px 22px;background:linear-gradient(135deg,#3a5fd4,#4f7cff);color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:.88rem}</style></head><body><div class="card"><div class="brand"><div class="bic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div><span class="bnm">ProfNoteChat</span></div><div class="meta">✍️ ${name} &nbsp;·&nbsp; 📅 ${date}</div><div class="cnt">${content}</div><div class="ft">تمت المشاركة عبر NoteChat<br><a href="https://mohamadysons.com/prof/notes/" class="cta">انشئ ملاحظاتك →</a></div></div></body></html>`);
 });
 
 // ══════════════════════════════════════════════════════════
