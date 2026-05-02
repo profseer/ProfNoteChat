@@ -26,7 +26,7 @@ const UPLOADS_DIR = './uploads';
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname))
+  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(Buffer.from(file.originalname,'latin1').toString('utf8')))
 });
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -153,7 +153,7 @@ app.post('/api/upload', auth, upload.single('file'), (req, res) => {
   const fileUrl = `${proto}://${host}/uploads/${req.file.filename}`;
   const fileRecord = {
     id: uuidv4(), userId: req.user.id,
-    originalName: req.file.originalname, storedName: req.file.filename,
+    originalName: Buffer.from(req.file.originalname,'latin1').toString('utf8'), storedName: req.file.filename,
     mimeType: req.file.mimetype, size: req.file.size,
     url: fileUrl, createdAt: new Date().toISOString()
   };
