@@ -292,6 +292,15 @@ app.post('/api/admin/broadcast', adminAuth, (req, res) => {
   res.json({ ok: true, count: users.length });
 });
 
+// Admin: all files across all users with owner info
+app.get('/api/admin/storage', adminAuth, (req, res) => {
+  const files = db.get('files').value().map(f => {
+    const user = db.get('users').find({ id: f.userId }).value();
+    return { ...f, ownerName: user ? user.username : 'محذوف', ownerEmail: user ? user.email : '' };
+  });
+  res.json(files);
+});
+
 // ══════════════════════════════════════════════════════════
 // START
 // ══════════════════════════════════════════════════════════
