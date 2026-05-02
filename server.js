@@ -52,7 +52,13 @@ function adminAuth(req, res, next) {
 // ══════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ══════════════════════════════════════════════════════════
-app.get('/', (req, res) => res.json({ status: 'NoteChat API running ✓' }));
+app.get('/', (req, res) => res.json({ status: 'ProfNoteChat API running ✓' }));
+
+// Public: check if any admin exists (for registration hint)
+app.get('/api/has-admin', (req, res) => {
+  const hasAdmin = db.get('users').some({ isAdmin: true }).value();
+  res.json({ hasAdmin });
+});
 
 app.post('/api/register', async (req, res) => {
   const { username, email, password } = req.body;
@@ -258,6 +264,18 @@ app.delete('/api/admin/users/:id/files', adminAuth, (req, res) => {
   db.get('files').remove({ userId: req.params.id }).write();
   db.get('messages').remove({ userId: req.params.id, type: 'file' }).write();
   res.json({ ok: true });
+});
+
+// Admin: view all messages for a user
+app.get('/api/admin/users/:id/messages', adminAuth, (req, res) => {
+  const msgs = db.get('messages').filter({ userId: req.params.id }).value();
+  res.json(msgs);
+});
+
+// Admin: view all files for a user
+app.get('/api/admin/users/:id/files', adminAuth, (req, res) => {
+  const files = db.get('files').filter({ userId: req.params.id }).value();
+  res.json(files);
 });
 
 app.post('/api/admin/broadcast', adminAuth, (req, res) => {
