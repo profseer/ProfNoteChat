@@ -227,9 +227,12 @@ app.patch('/api/messages/:id', auth, async (req, res) => {
   try {
     const { text } = req.body;
     if (!text?.trim()) return res.status(400).json({ error: 'النص مطلوب' });
-    const msg = await dbFindOne(db.messages, { _id: req.params.id, userId: req.user.id });
+    const msg = await dbFindOne(db.messages, { $or: [
+      { _id: req.params.id, userId: req.user.id },
+      { id:  req.params.id, userId: req.user.id }
+    ]});
     if (!msg) return res.status(404).json({ error: 'غير موجود' });
-    await dbUpdate(db.messages, { _id: req.params.id }, { $set: { text: text.trim(), edited: true, editedAt: new Date() } });
+    await dbUpdate(db.messages, { _id: msg._id }, { $set: { text: text.trim(), edited: true, editedAt: new Date() } });
     emitToUser(req.user.id, 'message:edit', { id: req.params.id, text: text.trim() });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -237,7 +240,10 @@ app.patch('/api/messages/:id', auth, async (req, res) => {
 
 app.delete('/api/messages/:id', auth, async (req, res) => {
   try {
-    const msg = await dbFindOne(db.messages, { _id: req.params.id, userId: req.user.id });
+    const msg = await dbFindOne(db.messages, { $or: [
+      { _id: req.params.id, userId: req.user.id },
+      { id:  req.params.id, userId: req.user.id }
+    ]});
     if (!msg) return res.status(404).json({ error: 'غير موجود' });
     if (msg.fileId) {
       const file = await dbFindOne(db.files, { _id: msg.fileId });
@@ -246,7 +252,7 @@ app.delete('/api/messages/:id', auth, async (req, res) => {
         await dbRemove(db.files, { _id: file._id }, { multi: false });
       }
     }
-    await dbRemove(db.messages, { _id: req.params.id }, { multi: false });
+    await dbRemove(db.messages, { _id: msg._id }, { multi: false });
     emitToUser(req.user.id, 'message:delete', { id: req.params.id });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -298,8 +304,10 @@ app.get('/api/files', auth, async (req, res) => {
 app.post('/api/share', auth, async (req, res) => {
   try {
     const { messageId } = req.body;
-    const msg = await dbFindOne(db.messages, { _id: messageId, userId: req.user.id });
+    // Support both _id and id fields for compatibility
+    const msg = await dbFindOne(db.messages, { $or: [{ _id: messageId }, { id: messageId }] });
     if (!msg) return res.status(404).json({ error: 'الملاحظة غير موجودة' });
+    if (msg.userId !== req.user.id) return res.status(403).json({ error: 'غير مصرح' });
     const existing = await dbFindOne(db.shares, { messageId });
     if (existing) return res.json({ shareId: existing.shareId });
     const shareId = uuidv4().replace(/-/g,'').slice(0,14);
