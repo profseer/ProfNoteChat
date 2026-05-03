@@ -69,7 +69,18 @@ const upload = multer({
 });
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://mohamadysons.com',
+    'https://www.mohamadysons.com',
+    'http://localhost:3000',
+    /\.mohamadysons\.com$/,
+    // Allow extension
+    /^chrome-extension:/,
+    /^moz-extension:/
+  ],
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -331,7 +342,19 @@ app.get('/share/:shareId', async (req, res) => {
   const name = user?.username || 'مستخدم';
   const date = new Date(msg.createdAt).toLocaleDateString('ar', { year:'numeric', month:'long', day:'numeric' });
   let content = '';
-  if (msg.type==='text')   content = `<p class="nt">${(msg.text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')}</p>`;
+  if (msg.type==='text') {
+    const isTodo = msg.text?.startsWith('📋TODO:');
+    if (isTodo) {
+      try {
+        const td = JSON.parse(msg.text.slice('📋TODO:'.length));
+        const done = td.items.filter(i=>i.done).length;
+        const items = td.items.map(it => `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;"><div style="width:18px;height:18px;border-radius:5px;border:1.5px solid ${it.done?'#00a878':'#ccc'};background:${it.done?'#00a878':'transparent'};flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-top:1px;">${it.done?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>':''}</div><span style="${it.done?'text-decoration:line-through;opacity:.5;':''}">${it.text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span></div>`).join('');
+        content = `<div style="background:#f5f8ff;border-radius:14px;padding:16px 18px;"><div style="font-size:.82rem;font-weight:800;color:#4472ee;margin-bottom:12px;">☑️ ${td.title||'قائمة مهام'} <span style="background:#e8eefb;border-radius:99px;padding:2px 8px;">${done}/${td.items.length}</span></div>${items}</div>`;
+      } catch { content = `<p class="nt">${(msg.text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`; }
+    } else {
+      content = `<p class="nt">${(msg.text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')}</p>`;
+    }
+  }
   else if (msg.fileMime?.startsWith('image/')||msg.type==='drawing') content=`<img src="${msg.fileUrl}" style="max-width:100%;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.12)"/>`;
   else if (msg.type==='audio') content=`<audio controls src="${msg.fileUrl}" style="width:100%"></audio>`;
   else if (msg.fileMime?.startsWith('video/')) content=`<video controls src="${msg.fileUrl}" style="max-width:100%;border-radius:12px"></video>`;
