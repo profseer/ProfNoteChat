@@ -52,6 +52,11 @@ const dbCount   = (col, q={})                   => new Promise((res,rej) => col.
 // Compact DB periodically (keeps file size lean)
 setInterval(() => { Object.values(db).forEach(d => d.persistence.compactDatafile()); }, 3600000);
 
+// App-wide config (persisted in DB as key-value)
+const appConfig = { maxFileMB: 50 };
+// Load from DB
+dbFindOne(db.users, { __config: true }).then(cfg => { if (cfg) Object.assign(appConfig, cfg); }).catch(() => {});
+
 // ══ FILE UPLOADS ════════════════════════════════════════════════
 const UPLOADS_DIR = './uploads';
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -62,11 +67,15 @@ const storage = multer.diskStorage({
     Buffer.from(file.originalname, 'latin1').toString('utf8')
   ))
 });
-const upload = multer({
-  storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-  fileFilter: (req, file, cb) => cb(null, true)
-});
+// Dynamic upload with current maxFileMB
+function getUpload(){
+  return multer({
+    storage,
+    limits: { fileSize: (appConfig.maxFileMB || 50) * 1024 * 1024 },
+    fileFilter: (req, file, cb) => cb(null, true)
+  });
+}
+const upload = { single: (field) => (req,res,next) => getUpload().single(field)(req,res,next) };
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
 app.use(cors({
@@ -434,6 +443,58 @@ app.get('/api/admin/users/:id/messages', adminAuth, async (req, res) => {
 app.get('/api/admin/users/:id/files', adminAuth, async (req, res) => {
   const files = await dbFind(db.files, { userId: req.params.id }, { createdAt: -1 });
   res.json(files);
+});
+
+app.get('/api/admin/settings', adminAuth, async (req, res) => {
+  res.json({ maxFileMB: appConfig.maxFileMB || 50 });
+});
+
+app.patch('/api/admin/settings', adminAuth, async (req, res) => {
+  const { maxFileMB } = req.body;
+  if (maxFileMB && maxFileMB >= 1 && maxFileMB <= 100) {
+    appConfig.maxFileMB = maxFileMB;
+    // Persist in DB as a special config record
+    dbRemove(db.users, { __config: true }).then(() =>
+      dbInsert(db.users, { __config: true, maxFileMB })
+    ).catch(() => {});
+  }
+  res.json({ ok: true, maxFileMB: appConfig.maxFileMB });
+});
+
+// Delete own account
+app.delete('/api/me', auth, async (req, res) => {
+  try {
+    const uid = req.user.id;
+    const u = await dbFindOne(db.users, { _id: uid });
+    if (!u) return res.status(404).json({ error: 'المستخدم غير موجود' });
+    // Delete all user data
+    const files = await dbFind(db.files, { userId: uid });
+    files.forEach(f => { try { require('fs').unlinkSync(require('path').join(UPLOADS_DIR, f.storedName)); } catch {} });
+    await Promise.all([
+      dbRemove(db.files, { userId: uid }),
+      dbRemove(db.messages, { userId: uid }),
+      dbRemove(db.shares, { userId: uid }),
+      dbRemove(db.users, { _id: uid }, { multi: false })
+    ]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Clear own messages
+app.delete('/api/me/messages', auth, async (req, res) => {
+  await dbRemove(db.messages, { userId: req.user.id });
+  res.json({ ok: true });
+});
+
+// Clear own files  
+app.delete('/api/me/files', auth, async (req, res) => {
+  const files = await dbFind(db.files, { userId: req.user.id });
+  files.forEach(f => { try { require('fs').unlinkSync(require('path').join(UPLOADS_DIR, f.storedName)); } catch {} });
+  await Promise.all([
+    dbRemove(db.files, { userId: req.user.id }),
+    dbRemove(db.messages, { userId: req.user.id, type: 'file' })
+  ]);
+  res.json({ ok: true });
 });
 
 app.post('/api/admin/broadcast', adminAuth, async (req, res) => {
