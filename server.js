@@ -28,10 +28,13 @@ const DB_DIR = './db';
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
 const db = {
-  users:    new Datastore({ filename: `${DB_DIR}/users.db`,    autoload: true }),
-  messages: new Datastore({ filename: `${DB_DIR}/messages.db`, autoload: true }),
-  files:    new Datastore({ filename: `${DB_DIR}/files.db`,    autoload: true }),
-  shares:   new Datastore({ filename: `${DB_DIR}/shares.db`,   autoload: true }),
+  users:     new Datastore({ filename: `${DB_DIR}/users.db`,     autoload: true }),
+  messages:  new Datastore({ filename: `${DB_DIR}/messages.db`,  autoload: true }),
+  files:     new Datastore({ filename: `${DB_DIR}/files.db`,     autoload: true }),
+  shares:    new Datastore({ filename: `${DB_DIR}/shares.db`,    autoload: true }),
+  tags:      new Datastore({ filename: `${DB_DIR}/tags.db`,      autoload: true }),
+  reactions: new Datastore({ filename: `${DB_DIR}/reactions.db`, autoload: true }),
+  folders:   new Datastore({ filename: `${DB_DIR}/folders.db`,   autoload: true }),
 };
 
 // Indexes for performance
@@ -40,6 +43,9 @@ db.users.ensureIndex({ fieldName: 'email',    unique: true });
 db.messages.ensureIndex({ fieldName: 'userId' });
 db.files.ensureIndex({ fieldName: 'userId' });
 db.shares.ensureIndex({ fieldName: 'shareId', unique: true });
+db.tags.ensureIndex({ fieldName: 'userId' });
+db.reactions.ensureIndex({ fieldName: 'messageId' });
+db.folders.ensureIndex({ fieldName: 'userId' });
 
 // NeDB promise wrappers
 const dbFind    = (col, q={}, sort={}, lim=0)   => new Promise((res,rej) => { let c=col.find(q); if(Object.keys(sort).length)c=c.sort(sort); if(lim)c=c.limit(lim); c.exec((e,d)=>e?rej(e):res(d)); });
@@ -495,6 +501,121 @@ app.delete('/api/me/files', auth, async (req, res) => {
     dbRemove(db.messages, { userId: req.user.id, type: 'file' })
   ]);
   res.json({ ok: true });
+});
+
+// ══ PIN / UNPIN ══════════════════════════════════════════════
+app.patch('/api/messages/:id/pin', auth, async (req, res) => {
+  try {
+    const msg = await dbFindOne(db.messages, { _id: req.params.id, userId: req.user.id });
+    if (!msg) return res.status(404).json({ error: 'غير موجود' });
+    const pinned = !msg.pinned;
+    await dbUpdate(db.messages, { _id: msg._id }, { $set: { pinned } });
+    emitToUser(req.user.id, 'message:pin', { id: req.params.id, pinned });
+    res.json({ ok: true, pinned });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══ TAGS ══════════════════════════════════════════════════════
+app.get('/api/tags', auth, async (req, res) => {
+  const tags = await dbFind(db.tags, { userId: req.user.id }, { createdAt: 1 });
+  res.json(tags);
+});
+app.post('/api/tags', auth, async (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'الاسم مطلوب' });
+    const existing = await dbFindOne(db.tags, { userId: req.user.id, name: name.trim() });
+    if (existing) return res.status(409).json({ error: 'الوسم موجود بالفعل' });
+    const tag = { _id: uuidv4(), userId: req.user.id, name: name.trim(), color: color || '#4f7cff', createdAt: new Date() };
+    await dbInsert(db.tags, tag);
+    res.json(tag);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/tags/:id', auth, async (req, res) => {
+  await dbRemove(db.tags, { _id: req.params.id, userId: req.user.id }, { multi: false });
+  // Remove tag from all messages
+  await dbUpdate(db.messages, { userId: req.user.id, tags: { $elemMatch: req.params.id } }, { $pull: { tags: req.params.id } }, { multi: true });
+  res.json({ ok: true });
+});
+app.patch('/api/messages/:id/tags', auth, async (req, res) => {
+  try {
+    const { tags } = req.body; // array of tag ids
+    const msg = await dbFindOne(db.messages, { _id: req.params.id, userId: req.user.id });
+    if (!msg) return res.status(404).json({ error: 'غير موجود' });
+    await dbUpdate(db.messages, { _id: msg._id }, { $set: { tags: tags || [] } });
+    emitToUser(req.user.id, 'message:tags', { id: req.params.id, tags });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══ REACTIONS ═════════════════════════════════════════════════
+app.get('/api/messages/:id/reactions', auth, async (req, res) => {
+  const reactions = await dbFind(db.reactions, { messageId: req.params.id, userId: req.user.id });
+  res.json(reactions);
+});
+app.post('/api/messages/:id/reactions', auth, async (req, res) => {
+  try {
+    const { emoji } = req.body;
+    if (!emoji) return res.status(400).json({ error: 'emoji مطلوب' });
+    const existing = await dbFindOne(db.reactions, { messageId: req.params.id, userId: req.user.id, emoji });
+    if (existing) {
+      await dbRemove(db.reactions, { _id: existing._id }, { multi: false });
+      emitToUser(req.user.id, 'reaction:remove', { messageId: req.params.id, emoji });
+      return res.json({ ok: true, action: 'removed' });
+    }
+    const r = { _id: uuidv4(), messageId: req.params.id, userId: req.user.id, emoji, createdAt: new Date() };
+    await dbInsert(db.reactions, r);
+    emitToUser(req.user.id, 'reaction:add', { messageId: req.params.id, emoji });
+    res.json({ ok: true, action: 'added' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══ FOLDERS ═══════════════════════════════════════════════════
+app.get('/api/folders', auth, async (req, res) => {
+  const folders = await dbFind(db.folders, { userId: req.user.id }, { createdAt: 1 });
+  res.json(folders);
+});
+app.post('/api/folders', auth, async (req, res) => {
+  try {
+    const { name, icon, color } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'الاسم مطلوب' });
+    const folder = { _id: uuidv4(), userId: req.user.id, name: name.trim(), icon: icon || '📁', color: color || '#4f7cff', createdAt: new Date() };
+    await dbInsert(db.folders, folder);
+    res.json(folder);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.patch('/api/folders/:id', auth, async (req, res) => {
+  const { name, icon, color } = req.body;
+  await dbUpdate(db.folders, { _id: req.params.id, userId: req.user.id }, { $set: { name, icon, color } });
+  res.json({ ok: true });
+});
+app.delete('/api/folders/:id', auth, async (req, res) => {
+  await dbRemove(db.folders, { _id: req.params.id, userId: req.user.id }, { multi: false });
+  await dbUpdate(db.messages, { userId: req.user.id, folderId: req.params.id }, { $unset: { folderId: true } }, { multi: true });
+  res.json({ ok: true });
+});
+app.patch('/api/messages/:id/folder', auth, async (req, res) => {
+  try {
+    const { folderId } = req.body;
+    const msg = await dbFindOne(db.messages, { _id: req.params.id, userId: req.user.id });
+    if (!msg) return res.status(404).json({ error: 'غير موجود' });
+    const update = folderId ? { $set: { folderId } } : { $unset: { folderId: true } };
+    await dbUpdate(db.messages, { _id: msg._id }, update);
+    emitToUser(req.user.id, 'message:folder', { id: req.params.id, folderId });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══ REACTIONS BULK (load all reactions for user messages) ══════
+app.get('/api/reactions', auth, async (req, res) => {
+  const reactions = await dbFind(db.reactions, { userId: req.user.id });
+  // Group by messageId
+  const grouped = {};
+  reactions.forEach(r => {
+    if (!grouped[r.messageId]) grouped[r.messageId] = [];
+    grouped[r.messageId].push(r.emoji);
+  });
+  res.json(grouped);
 });
 
 app.post('/api/admin/broadcast', adminAuth, async (req, res) => {
