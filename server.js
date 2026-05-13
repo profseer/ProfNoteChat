@@ -1,4 +1,4 @@
-/**
+/***
  * ProfNoteChat — Production Server
  * Stack: Express + NeDB (fast embedded DB) + Socket.io (realtime) + Multer
  * NeDB = MongoDB-like API, 10-100x faster than lowdb, no compilation needed
