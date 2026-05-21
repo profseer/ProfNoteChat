@@ -60,13 +60,9 @@ setInterval(() => { Object.values(db).forEach(d => d.persistence.compactDatafile
 
 // App-wide config (persisted in DB as key-value)
 const appConfig = {
-  maxFileMB:         50,
-  maxFileCount:      10,
-  imgCompress:       false,
-  imgQuality:        75,
-  showUploadToUsers: false,
-  adminExempt:       true,
-  applyTo:           'all',
+  maxFileMB: 50, maxFileCount: 10,
+  imgCompress: false, imgQuality: 75,
+  showUploadToUsers: false, adminExempt: true, applyTo: 'all',
 };
 // Load from DB
 dbFindOne(db.users, { __config: true }).then(cfg => { if (cfg) Object.assign(appConfig, cfg); }).catch(() => {});
@@ -83,15 +79,12 @@ const storage = multer.diskStorage({
 });
 // Load saved config from DB on startup
 db.users.findOne({ __config: true }, (err, doc) => {
-  if (doc) {
-    if (doc.maxFileMB)         appConfig.maxFileMB         = doc.maxFileMB;
-    if (doc.maxFileCount)      appConfig.maxFileCount       = doc.maxFileCount;
-    if (doc.imgCompress!=null) appConfig.imgCompress        = doc.imgCompress;
-    if (doc.imgQuality)        appConfig.imgQuality         = doc.imgQuality;
-    if (doc.showUploadToUsers!=null) appConfig.showUploadToUsers = doc.showUploadToUsers;
-    if (doc.adminExempt!=null) appConfig.adminExempt        = doc.adminExempt;
-    if (doc.applyTo)           appConfig.applyTo            = doc.applyTo;
-    console.log('Loaded config from DB:', appConfig);
+  if (!err && doc) {
+    ['maxFileMB','maxFileCount','imgCompress','imgQuality',
+     'showUploadToUsers','adminExempt','applyTo'].forEach(k => {
+      if (doc[k] != null) appConfig[k] = doc[k];
+    });
+    console.log('Config loaded from DB:', appConfig);
   }
 });
 
@@ -475,51 +468,30 @@ app.get('/api/admin/users/:id/files', adminAuth, async (req, res) => {
 
 app.get('/api/admin/settings', adminAuth, async (req, res) => {
   res.json({
-    maxFileMB:         appConfig.maxFileMB         || 50,
-    maxFileCount:      appConfig.maxFileCount       || 10,
-    imgCompress:       appConfig.imgCompress        || false,
-    imgQuality:        appConfig.imgQuality         || 75,
-    showUploadToUsers: appConfig.showUploadToUsers  || false,
-    adminExempt:       appConfig.adminExempt !== false,
-    applyTo:           appConfig.applyTo            || 'all',
+    maxFileMB: appConfig.maxFileMB || 50,
+    maxFileCount: appConfig.maxFileCount || 10,
+    imgCompress: !!appConfig.imgCompress,
+    imgQuality: appConfig.imgQuality || 75,
+    showUploadToUsers: !!appConfig.showUploadToUsers,
+    adminExempt: appConfig.adminExempt !== false,
+    applyTo: appConfig.applyTo || 'all',
   });
 });
 
 app.patch('/api/admin/settings', adminAuth, async (req, res) => {
-  const { maxFileMB, maxFileCount, imgCompress, imgQuality,
-          showUploadToUsers, adminExempt, applyTo } = req.body;
-
-  if (maxFileMB    && maxFileMB >= 1 && maxFileMB <= 200)
-    appConfig.maxFileMB = maxFileMB;
-  if (maxFileCount && maxFileCount >= 1 && maxFileCount <= 50)
-    appConfig.maxFileCount = maxFileCount;
-  if (imgCompress  != null) appConfig.imgCompress       = !!imgCompress;
-  if (imgQuality   && imgQuality >= 20 && imgQuality <= 95)
-    appConfig.imgQuality = imgQuality;
-  if (showUploadToUsers != null) appConfig.showUploadToUsers = !!showUploadToUsers;
-  if (adminExempt  != null) appConfig.adminExempt       = !!adminExempt;
-  if (applyTo      && ['all','users'].includes(applyTo)) appConfig.applyTo = applyTo;
-
-  // Reconfigure multer limit dynamically
-  const effectiveMB = appConfig.maxFileMB || 50;
-  upload._limits = { fileSize: effectiveMB * 1024 * 1024 };
-
-  // Persist all settings in DB
-  const toSave = {
-    __config: true,
-    maxFileMB:         appConfig.maxFileMB,
-    maxFileCount:      appConfig.maxFileCount,
-    imgCompress:       appConfig.imgCompress,
-    imgQuality:        appConfig.imgQuality,
-    showUploadToUsers: appConfig.showUploadToUsers,
-    adminExempt:       appConfig.adminExempt,
-    applyTo:           appConfig.applyTo,
-  };
+  const b = req.body;
+  if (b.maxFileMB    != null && b.maxFileMB >= 1 && b.maxFileMB <= 200)   appConfig.maxFileMB    = b.maxFileMB;
+  if (b.maxFileCount != null && b.maxFileCount >= 1 && b.maxFileCount <= 50) appConfig.maxFileCount = b.maxFileCount;
+  if (b.imgCompress  != null) appConfig.imgCompress       = !!b.imgCompress;
+  if (b.imgQuality   != null && b.imgQuality >= 20 && b.imgQuality <= 95)  appConfig.imgQuality   = b.imgQuality;
+  if (b.showUploadToUsers != null) appConfig.showUploadToUsers = !!b.showUploadToUsers;
+  if (b.adminExempt  != null) appConfig.adminExempt        = !!b.adminExempt;
+  if (b.applyTo      != null && ['all','users'].includes(b.applyTo)) appConfig.applyTo = b.applyTo;
+  // Persist to DB
   dbRemove(db.users, { __config: true })
-    .then(() => dbInsert(db.users, toSave))
+    .then(() => dbInsert(db.users, { __config: true, ...appConfig }))
     .catch(() => {});
-
-  res.json({ ok: true, ...toSave });
+  res.json({ ok: true, ...appConfig });
 });
 
 // Delete own account
