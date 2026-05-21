@@ -59,11 +59,7 @@ const dbCount   = (col, q={})                   => new Promise((res,rej) => col.
 setInterval(() => { Object.values(db).forEach(d => d.persistence.compactDatafile()); }, 3600000);
 
 // App-wide config (persisted in DB as key-value)
-const appConfig = {
-  maxFileMB: 50, maxFileCount: 10,
-  imgCompress: false, imgQuality: 75,
-  showUploadToUsers: false, adminExempt: true, applyTo: 'all',
-};
+const appConfig = { maxFileMB:50, maxFileCount:10, imgCompress:false, imgQuality:75, showUploadToUsers:false, adminExempt:true, applyTo:'all' };
 // Load from DB
 dbFindOne(db.users, { __config: true }).then(cfg => { if (cfg) Object.assign(appConfig, cfg); }).catch(() => {});
 
@@ -77,17 +73,7 @@ const storage = multer.diskStorage({
     Buffer.from(file.originalname, 'latin1').toString('utf8')
   ))
 });
-// Load saved config from DB on startup
-db.users.findOne({ __config: true }, (err, doc) => {
-  if (!err && doc) {
-    ['maxFileMB','maxFileCount','imgCompress','imgQuality',
-     'showUploadToUsers','adminExempt','applyTo'].forEach(k => {
-      if (doc[k] != null) appConfig[k] = doc[k];
-    });
-    console.log('Config loaded from DB:', appConfig);
-  }
-});
-
+db.users.findOne({__config:true},(err,doc)=>{if(!err&&doc){['maxFileMB','maxFileCount','imgCompress','imgQuality','showUploadToUsers','adminExempt','applyTo'].forEach(k=>{if(doc[k]!=null)appConfig[k]=doc[k];});}});
 // Dynamic upload with current maxFileMB
 function getUpload(){
   return multer({
@@ -466,32 +452,19 @@ app.get('/api/admin/users/:id/files', adminAuth, async (req, res) => {
   res.json(files);
 });
 
-app.get('/api/admin/settings', adminAuth, async (req, res) => {
-  res.json({
-    maxFileMB: appConfig.maxFileMB || 50,
-    maxFileCount: appConfig.maxFileCount || 10,
-    imgCompress: !!appConfig.imgCompress,
-    imgQuality: appConfig.imgQuality || 75,
-    showUploadToUsers: !!appConfig.showUploadToUsers,
-    adminExempt: appConfig.adminExempt !== false,
-    applyTo: appConfig.applyTo || 'all',
-  });
-});
+app.get('/api/admin/settings', adminAuth, async (req, res) => { res.json({maxFileMB:appConfig.maxFileMB||50,maxFileCount:appConfig.maxFileCount||10,imgCompress:!!appConfig.imgCompress,imgQuality:appConfig.imgQuality||75,showUploadToUsers:!!appConfig.showUploadToUsers,adminExempt:appConfig.adminExempt!==false,applyTo:appConfig.applyTo||'all'}); });
 
 app.patch('/api/admin/settings', adminAuth, async (req, res) => {
-  const b = req.body;
-  if (b.maxFileMB    != null && b.maxFileMB >= 1 && b.maxFileMB <= 200)   appConfig.maxFileMB    = b.maxFileMB;
-  if (b.maxFileCount != null && b.maxFileCount >= 1 && b.maxFileCount <= 50) appConfig.maxFileCount = b.maxFileCount;
-  if (b.imgCompress  != null) appConfig.imgCompress       = !!b.imgCompress;
-  if (b.imgQuality   != null && b.imgQuality >= 20 && b.imgQuality <= 95)  appConfig.imgQuality   = b.imgQuality;
-  if (b.showUploadToUsers != null) appConfig.showUploadToUsers = !!b.showUploadToUsers;
-  if (b.adminExempt  != null) appConfig.adminExempt        = !!b.adminExempt;
-  if (b.applyTo      != null && ['all','users'].includes(b.applyTo)) appConfig.applyTo = b.applyTo;
-  // Persist to DB
-  dbRemove(db.users, { __config: true })
-    .then(() => dbInsert(db.users, { __config: true, ...appConfig }))
-    .catch(() => {});
-  res.json({ ok: true, ...appConfig });
+  const b=req.body;
+  if(b.maxFileMB!=null&&b.maxFileMB>=1&&b.maxFileMB<=200) appConfig.maxFileMB=b.maxFileMB;
+  if(b.maxFileCount!=null&&b.maxFileCount>=1&&b.maxFileCount<=50) appConfig.maxFileCount=b.maxFileCount;
+  if(b.imgCompress!=null) appConfig.imgCompress=!!b.imgCompress;
+  if(b.imgQuality!=null&&b.imgQuality>=20&&b.imgQuality<=95) appConfig.imgQuality=b.imgQuality;
+  if(b.showUploadToUsers!=null) appConfig.showUploadToUsers=!!b.showUploadToUsers;
+  if(b.adminExempt!=null) appConfig.adminExempt=!!b.adminExempt;
+  if(b.applyTo&&['all','users'].includes(b.applyTo)) appConfig.applyTo=b.applyTo;
+  dbRemove(db.users,{__config:true}).then(()=>dbInsert(db.users,{__config:true,...appConfig})).catch(()=>{});
+  res.json({ok:true,...appConfig});
 });
 
 // Delete own account
