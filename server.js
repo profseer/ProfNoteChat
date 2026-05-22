@@ -59,7 +59,16 @@ const dbCount   = (col, q={})                   => new Promise((res,rej) => col.
 setInterval(() => { Object.values(db).forEach(d => d.persistence.compactDatafile()); }, 3600000);
 
 // App-wide config (persisted in DB as key-value)
-const appConfig = { maxFileMB:50, maxFileCount:10, imgCompress:false, imgQuality:75, showUploadToUsers:false, adminExempt:true, applyTo:'all' };
+const appConfig = { 
+  maxFileMB:50, maxFileCount:10, imgCompress:false, imgQuality:75, 
+  showUploadToUsers:false, adminExempt:true, applyTo:'all',
+  allowRegistration:true, autoActivate:true, autoLogout:false,
+  sessionTimeout:30, enableEncryption:true, pushNotif:true,
+  soundNotif:true, autoSync:true, syncInterval:8,
+  maxMsgLength:2000, allowVoice:true, allowDrawing:true, allowSTT:true,
+  allowedFileTypes:['image','video','audio','pdf','doc','zip','code','other'],
+  adminLimits:false
+};
 // Load from DB
 dbFindOne(db.users, { __config: true }).then(cfg => { if (cfg) Object.assign(appConfig, cfg); }).catch(() => {});
 
@@ -73,7 +82,13 @@ const storage = multer.diskStorage({
     Buffer.from(file.originalname, 'latin1').toString('utf8')
   ))
 });
-db.users.findOne({__config:true},(err,doc)=>{if(!err&&doc){['maxFileMB','maxFileCount','imgCompress','imgQuality','showUploadToUsers','adminExempt','applyTo'].forEach(k=>{if(doc[k]!=null)appConfig[k]=doc[k];});}});
+db.users.findOne({__config:true},(err,doc)=>{if(!err&&doc){
+  ['maxFileMB','maxFileCount','imgCompress','imgQuality','showUploadToUsers','adminExempt','applyTo',
+   'allowRegistration','autoActivate','autoLogout','sessionTimeout','enableEncryption','pushNotif',
+   'soundNotif','autoSync','syncInterval','maxMsgLength','allowVoice','allowDrawing','allowSTT',
+   'allowedFileTypes','adminLimits'
+  ].forEach(k=>{if(doc[k]!=null)appConfig[k]=doc[k];});
+}});
 // Dynamic upload with current maxFileMB
 function getUpload(){
   return multer({
@@ -452,17 +467,60 @@ app.get('/api/admin/users/:id/files', adminAuth, async (req, res) => {
   res.json(files);
 });
 
-app.get('/api/admin/settings', adminAuth, async (req, res) => { res.json({maxFileMB:appConfig.maxFileMB||50,maxFileCount:appConfig.maxFileCount||10,imgCompress:!!appConfig.imgCompress,imgQuality:appConfig.imgQuality||75,showUploadToUsers:!!appConfig.showUploadToUsers,adminExempt:appConfig.adminExempt!==false,applyTo:appConfig.applyTo||'all'}); });
+app.get('/api/admin/settings', adminAuth, async (req, res) => { 
+  res.json({
+    maxFileMB:          appConfig.maxFileMB||50,
+    maxFileCount:       appConfig.maxFileCount||10,
+    imgCompress:        !!appConfig.imgCompress,
+    imgQuality:         appConfig.imgQuality||75,
+    showUploadToUsers:  !!appConfig.showUploadToUsers,
+    adminExempt:        appConfig.adminExempt!==false,
+    applyTo:            appConfig.applyTo||'all',
+    allowRegistration:  appConfig.allowRegistration!==false,
+    autoActivate:       appConfig.autoActivate!==false,
+    autoLogout:         !!appConfig.autoLogout,
+    sessionTimeout:     appConfig.sessionTimeout||30,
+    enableEncryption:   appConfig.enableEncryption!==false,
+    pushNotif:          appConfig.pushNotif!==false,
+    soundNotif:         appConfig.soundNotif!==false,
+    autoSync:           appConfig.autoSync!==false,
+    syncInterval:       appConfig.syncInterval||8,
+    maxMsgLength:       appConfig.maxMsgLength||2000,
+    allowVoice:         appConfig.allowVoice!==false,
+    allowDrawing:       appConfig.allowDrawing!==false,
+    allowSTT:           appConfig.allowSTT!==false,
+    allowedFileTypes:   appConfig.allowedFileTypes||['image','video','audio','pdf','doc','zip','code','other'],
+    adminLimits:        !!appConfig.adminLimits,
+  }); 
+});
 
 app.patch('/api/admin/settings', adminAuth, async (req, res) => {
   const b=req.body;
-  if(b.maxFileMB!=null&&b.maxFileMB>=1&&b.maxFileMB<=200) appConfig.maxFileMB=b.maxFileMB;
+  // Upload policy
+  if(b.maxFileMB!=null&&b.maxFileMB>=1&&b.maxFileMB<=200)     appConfig.maxFileMB=b.maxFileMB;
   if(b.maxFileCount!=null&&b.maxFileCount>=1&&b.maxFileCount<=50) appConfig.maxFileCount=b.maxFileCount;
-  if(b.imgCompress!=null) appConfig.imgCompress=!!b.imgCompress;
-  if(b.imgQuality!=null&&b.imgQuality>=20&&b.imgQuality<=95) appConfig.imgQuality=b.imgQuality;
-  if(b.showUploadToUsers!=null) appConfig.showUploadToUsers=!!b.showUploadToUsers;
-  if(b.adminExempt!=null) appConfig.adminExempt=!!b.adminExempt;
+  if(b.imgCompress!=null)                                      appConfig.imgCompress=!!b.imgCompress;
+  if(b.imgQuality!=null&&b.imgQuality>=20&&b.imgQuality<=95)  appConfig.imgQuality=b.imgQuality;
+  if(b.showUploadToUsers!=null)  appConfig.showUploadToUsers=!!b.showUploadToUsers;
+  if(b.adminExempt!=null)        appConfig.adminExempt=!!b.adminExempt;
   if(b.applyTo&&['all','users'].includes(b.applyTo)) appConfig.applyTo=b.applyTo;
+  if(Array.isArray(b.allowedFileTypes)) appConfig.allowedFileTypes=b.allowedFileTypes;
+  // Global app settings
+  if(b.allowRegistration!=null)  appConfig.allowRegistration=!!b.allowRegistration;
+  if(b.autoActivate!=null)       appConfig.autoActivate=!!b.autoActivate;
+  if(b.autoLogout!=null)         appConfig.autoLogout=!!b.autoLogout;
+  if(b.sessionTimeout!=null&&b.sessionTimeout>=5&&b.sessionTimeout<=120) appConfig.sessionTimeout=b.sessionTimeout;
+  if(b.enableEncryption!=null)   appConfig.enableEncryption=!!b.enableEncryption;
+  if(b.pushNotif!=null)          appConfig.pushNotif=!!b.pushNotif;
+  if(b.soundNotif!=null)         appConfig.soundNotif=!!b.soundNotif;
+  if(b.autoSync!=null)           appConfig.autoSync=!!b.autoSync;
+  if(b.syncInterval!=null&&b.syncInterval>=3&&b.syncInterval<=60) appConfig.syncInterval=b.syncInterval;
+  if(b.maxMsgLength!=null&&b.maxMsgLength>=100&&b.maxMsgLength<=10000) appConfig.maxMsgLength=b.maxMsgLength;
+  if(b.allowVoice!=null)         appConfig.allowVoice=!!b.allowVoice;
+  if(b.allowDrawing!=null)       appConfig.allowDrawing=!!b.allowDrawing;
+  if(b.allowSTT!=null)           appConfig.allowSTT=!!b.allowSTT;
+  if(b.adminLimits!=null)        appConfig.adminLimits=!!b.adminLimits;
+  // Persist all to DB
   dbRemove(db.users,{__config:true}).then(()=>dbInsert(db.users,{__config:true,...appConfig})).catch(()=>{});
   res.json({ok:true,...appConfig});
 });
