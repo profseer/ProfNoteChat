@@ -61,7 +61,7 @@ const dbCount   = (col, q={})                   => new Promise((res,rej) => col.
 setInterval(() => { Object.values(db).forEach(d => d.persistence.compactDatafile()); }, 3600000);
 
 // App-wide config (persisted in DB as key-value)
-const appConfig = { maxFileMB:50, maxFileCount:10, imgCompress:false, imgQuality:75, showUploadToUsers:false, adminExempt:true, applyTo:'all', allowRegistration:true, autoActivate:true, enableEncryption:true, pushNotif:true, soundNotif:true, allowVoice:true, allowDrawing:true, allowSTT:true, allowedFileTypes:['image','video','audio','pdf','doc','zip','code','other'], adminInviteCode:'', multiAdmin:true, sessionTimeout:30, autoLogout:false };
+const appConfig = { maxFileMB:50, maxFileCount:10, imgCompress:false, imgQuality:75, showUploadToUsers:false, adminExempt:true, applyTo:'all', allowRegistration:true, autoActivate:true, autoLogout:false, sessionTimeout:30, enableEncryption:true, pushNotif:true, soundNotif:true, allowVoice:true, allowDrawing:true, allowSTT:true, allowedFileTypes:['image','video','audio','pdf','doc','zip','code','other'], adminInviteCode:'', multiAdmin:true };
 // Load from DB
 dbFindOne(db.users, { __config: true }).then(cfg => { if (cfg) Object.assign(appConfig, cfg); }).catch(() => {});
 
@@ -75,7 +75,7 @@ const storage = multer.diskStorage({
     Buffer.from(file.originalname, 'latin1').toString('utf8')
   ))
 });
-db.users.findOne({__config:true},(err,doc)=>{if(!err&&doc){['maxFileMB','maxFileCount','imgCompress','imgQuality','showUploadToUsers','adminExempt','applyTo','allowRegistration','autoActivate','enableEncryption','pushNotif','soundNotif','allowVoice','allowDrawing','allowSTT','allowedFileTypes','adminInviteCode','multiAdmin','sessionTimeout','autoLogout'].forEach(k=>{if(doc[k]!=null)appConfig[k]=doc[k];});}});
+db.users.findOne({__config:true},(err,doc)=>{if(!err&&doc){['maxFileMB','maxFileCount','imgCompress','imgQuality','showUploadToUsers','adminExempt','applyTo','allowRegistration','autoActivate','autoLogout','sessionTimeout','enableEncryption','pushNotif','soundNotif','allowVoice','allowDrawing','allowSTT','allowedFileTypes','adminInviteCode','multiAdmin'].forEach(k=>{if(doc[k]!=null)appConfig[k]=doc[k];});}});
 // Dynamic upload with current maxFileMB
 function getUpload(){
   return multer({
@@ -180,23 +180,44 @@ app.get('/api/has-admin', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   try {
     const { username, email, password, adminCode } = req.body;
-    if (!username || !email || !password) return res.status(400).json({ error: 'جميع الحقول مطلوبة' });
-    const totalUsers = await dbCount(db.users, { __config: { $exists: false } });
-    if (totalUsers > 0 && !appConfig.allowRegistration)
-      return res.status(403).json({ error: 'التسجيل معطّل. تواصل مع مدير النظام.' });
+    if (!username || !email || !password)
+      return res.status(400).json({ error: 'جميع الحقول مطلوبة' });
+    // Check if registration is allowed
+    if (!appConfig.allowRegistration) {
+      return res.status(403).json({ error: 'التسجيل معطّل حالياً من قِبل المدير' });
+    }
     const existing = await dbFindOne(db.users, { $or: [{ email }, { username }] });
     if (existing) return res.status(409).json({ error: 'اسم المستخدم أو البريد مستخدم بالفعل' });
+
+    const userCount = await dbCount(db.users, { __config: { $exists: false } });
+    const adminCount = await dbCount(db.users, { isAdmin: true, __config: { $exists: false } });
+    
+    // Determine if this user should be admin:
+    // 1. First user ever = always admin
+    // 2. Correct admin invite code provided
     let isAdmin = false;
-    if (totalUsers === 0) {
-      isAdmin = true;
-    } else if (adminCode && appConfig.adminInviteCode && adminCode.trim() === appConfig.adminInviteCode && appConfig.multiAdmin !== false) {
-      isAdmin = true;
+    if (userCount === 0) {
+      isAdmin = true; // first user = super admin
+    } else if (adminCode && appConfig.adminInviteCode && adminCode === appConfig.adminInviteCode) {
+      isAdmin = true; // valid admin invite code
     }
+    
+    // Auto-activate setting
     const active = isAdmin ? true : (appConfig.autoActivate !== false);
+    
     const hash = await bcrypt.hash(password, 10);
-    const user = { _id: uuidv4(), username, email, password: hash, isAdmin, active, createdAt: new Date(), lastSeen: new Date() };
+    const user = {
+      _id: uuidv4(), username, email,
+      password: hash, isAdmin,
+      active, createdAt: new Date(),
+      lastSeen: new Date()
+    };
     await dbInsert(db.users, user);
-    if (!active) return res.status(202).json({ pending: true, message: 'تم إنشاء حسابك. يحتاج موافقة المدير قبل التفعيل.' });
+    
+    if (!active) {
+      return res.status(202).json({ pending: true, message: 'تم إنشاء الحساب. يحتاج إلى موافقة المدير للتفعيل.' });
+    }
+    
     const token = jwt.sign({ id: user._id, username, email, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user._id, username, email, isAdmin: user.isAdmin } });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -456,111 +477,58 @@ app.get('/api/admin/users/:id/files', adminAuth, async (req, res) => {
   res.json(files);
 });
 
-app.get('/api/admin/settings', adminAuth, async (req, res) => { res.json({
-  maxFileMB:appConfig.maxFileMB||50, maxFileCount:appConfig.maxFileCount||10,
-  imgCompress:!!appConfig.imgCompress, imgQuality:appConfig.imgQuality||75,
-  showUploadToUsers:!!appConfig.showUploadToUsers, adminExempt:appConfig.adminExempt!==false, applyTo:appConfig.applyTo||'all',
-  allowRegistration:appConfig.allowRegistration!==false, autoActivate:appConfig.autoActivate!==false,
-  enableEncryption:appConfig.enableEncryption!==false, pushNotif:appConfig.pushNotif!==false, soundNotif:appConfig.soundNotif!==false,
-  allowVoice:appConfig.allowVoice!==false, allowDrawing:appConfig.allowDrawing!==false, allowSTT:appConfig.allowSTT!==false,
-  allowedFileTypes:appConfig.allowedFileTypes||['image','video','audio','pdf','doc','zip','code','other'],
-  adminInviteCode:appConfig.adminInviteCode||'', multiAdmin:appConfig.multiAdmin!==false,
-  sessionTimeout:appConfig.sessionTimeout||30, autoLogout:!!appConfig.autoLogout,
-}); });
+app.get('/api/admin/settings', adminAuth, async (req, res) => {
+  res.json({
+    maxFileMB:          appConfig.maxFileMB||50,
+    maxFileCount:       appConfig.maxFileCount||10,
+    imgCompress:        !!appConfig.imgCompress,
+    imgQuality:         appConfig.imgQuality||75,
+    showUploadToUsers:  !!appConfig.showUploadToUsers,
+    adminExempt:        appConfig.adminExempt!==false,
+    applyTo:            appConfig.applyTo||'all',
+    allowRegistration:  appConfig.allowRegistration!==false,
+    autoActivate:       appConfig.autoActivate!==false,
+    autoLogout:         !!appConfig.autoLogout,
+    sessionTimeout:     appConfig.sessionTimeout||30,
+    enableEncryption:   appConfig.enableEncryption!==false,
+    pushNotif:          appConfig.pushNotif!==false,
+    soundNotif:         appConfig.soundNotif!==false,
+    allowVoice:         appConfig.allowVoice!==false,
+    allowDrawing:       appConfig.allowDrawing!==false,
+    allowSTT:           appConfig.allowSTT!==false,
+    allowedFileTypes:   appConfig.allowedFileTypes||['image','video','audio','pdf','doc','zip','code','other'],
+    adminInviteCode:    appConfig.adminInviteCode||'',
+    multiAdmin:         appConfig.multiAdmin!==false,
+  });
+});
 
 app.patch('/api/admin/settings', adminAuth, async (req, res) => {
   const b=req.body;
+  // Upload policy
   if(b.maxFileMB!=null&&b.maxFileMB>=1&&b.maxFileMB<=500)   appConfig.maxFileMB=b.maxFileMB;
   if(b.maxFileCount!=null&&b.maxFileCount>=1&&b.maxFileCount<=100) appConfig.maxFileCount=b.maxFileCount;
-  if(b.imgCompress!=null)   appConfig.imgCompress=!!b.imgCompress;
+  if(b.imgCompress!=null)    appConfig.imgCompress=!!b.imgCompress;
   if(b.imgQuality!=null&&b.imgQuality>=10&&b.imgQuality<=100) appConfig.imgQuality=b.imgQuality;
   if(b.showUploadToUsers!=null) appConfig.showUploadToUsers=!!b.showUploadToUsers;
-  if(b.adminExempt!=null)   appConfig.adminExempt=!!b.adminExempt;
+  if(b.adminExempt!=null)    appConfig.adminExempt=!!b.adminExempt;
   if(b.applyTo&&['all','users'].includes(b.applyTo)) appConfig.applyTo=b.applyTo;
   if(Array.isArray(b.allowedFileTypes)) appConfig.allowedFileTypes=b.allowedFileTypes;
+  // Global app settings
   if(b.allowRegistration!=null) appConfig.allowRegistration=!!b.allowRegistration;
-  if(b.autoActivate!=null)  appConfig.autoActivate=!!b.autoActivate;
+  if(b.autoActivate!=null)   appConfig.autoActivate=!!b.autoActivate;
+  if(b.autoLogout!=null)     appConfig.autoLogout=!!b.autoLogout;
+  if(b.sessionTimeout!=null&&b.sessionTimeout>=5&&b.sessionTimeout<=480) appConfig.sessionTimeout=b.sessionTimeout;
   if(b.enableEncryption!=null) appConfig.enableEncryption=!!b.enableEncryption;
-  if(b.pushNotif!=null)     appConfig.pushNotif=!!b.pushNotif;
-  if(b.soundNotif!=null)    appConfig.soundNotif=!!b.soundNotif;
-  if(b.allowVoice!=null)    appConfig.allowVoice=!!b.allowVoice;
-  if(b.allowDrawing!=null)  appConfig.allowDrawing=!!b.allowDrawing;
-  if(b.allowSTT!=null)      appConfig.allowSTT=!!b.allowSTT;
+  if(b.pushNotif!=null)      appConfig.pushNotif=!!b.pushNotif;
+  if(b.soundNotif!=null)     appConfig.soundNotif=!!b.soundNotif;
+  if(b.allowVoice!=null)     appConfig.allowVoice=!!b.allowVoice;
+  if(b.allowDrawing!=null)   appConfig.allowDrawing=!!b.allowDrawing;
+  if(b.allowSTT!=null)       appConfig.allowSTT=!!b.allowSTT;
   if(b.adminInviteCode!=null) appConfig.adminInviteCode=String(b.adminInviteCode).trim();
-  if(b.multiAdmin!=null)    appConfig.multiAdmin=!!b.multiAdmin;
-  if(b.sessionTimeout!=null&&b.sessionTimeout>=5) appConfig.sessionTimeout=b.sessionTimeout;
-  if(b.autoLogout!=null)    appConfig.autoLogout=!!b.autoLogout;
+  if(b.multiAdmin!=null)     appConfig.multiAdmin=!!b.multiAdmin;
+  // Persist to DB
   dbRemove(db.users,{__config:true}).then(()=>dbInsert(db.users,{__config:true,...appConfig})).catch(()=>{});
   res.json({ok:true,...appConfig});
-});
-
-/* ── ADMIN INVITE CODE ─────────────────────────────── */
-app.post('/api/check-admin-code', async (req,res) => {
-  const { code } = req.body||{};
-  const valid = !!(code && appConfig.adminInviteCode && code.trim()===appConfig.adminInviteCode && appConfig.multiAdmin!==false);
-  res.json({ valid });
-});
-app.post('/api/admin/invite-code/generate', adminAuth, async (req,res) => {
-  const ch='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const seg=n=>Array.from({length:n},()=>ch[Math.floor(Math.random()*ch.length)]).join('');
-  const code=seg(4)+'-'+seg(4)+'-'+seg(4);
-  appConfig.adminInviteCode=code;
-  dbRemove(db.users,{__config:true}).then(()=>dbInsert(db.users,{__config:true,...appConfig})).catch(()=>{});
-  res.json({ code });
-});
-app.get('/api/admin/invite-code', adminAuth, async (req,res) => {
-  res.json({ code: appConfig.adminInviteCode||'' });
-});
-app.get('/api/admin/pending-users', adminAuth, async (req,res) => {
-  const users=await dbFind(db.users,{active:false,__config:{$exists:false}},{createdAt:-1});
-  res.json(users.map(u=>({id:u._id,username:u.username,email:u.email,createdAt:u.createdAt})));
-});
-
-/* ── NOTE SHARING BETWEEN USERS ────────────────────── */
-app.get('/api/users/search', auth, async (req,res) => {
-  const { q } = req.query;
-  if(!q||q.trim().length<2) return res.json([]);
-  const regex=new RegExp(q.trim().replace(/[.*+?^${}()|[\]\]/g,'\$&'),'i');
-  const users=await dbFind(db.users,{username:regex,_id:{$ne:req.user.id},__config:{$exists:false}});
-  res.json(users.slice(0,8).map(u=>({id:u._id,username:u.username,email:u.email})));
-});
-app.post('/api/share-note', auth, async (req,res) => {
-  try {
-    const { toUserId, messageId, caption } = req.body;
-    if(!toUserId||!messageId) return res.status(400).json({error:'بيانات ناقصة'});
-    const toUser=await dbFindOne(db.users,{_id:toUserId});
-    if(!toUser) return res.status(404).json({error:'المستخدم غير موجود'});
-    const origMsg=await dbFindOne(db.messages,{_id:messageId,userId:req.user.id});
-    if(!origMsg) return res.status(404).json({error:'الملاحظة غير موجودة'});
-    const rec={_id:uuidv4(),fromUserId:req.user.id,fromUsername:req.user.username,toUserId,messageId,originalMsg:origMsg,caption:caption?.trim()||'',status:'pending',createdAt:new Date()};
-    await dbInsert(db.noteShares,rec);
-    emitToUser(toUserId,'note:share:received',{id:rec._id,from:req.user.username,msg:origMsg,caption:rec.caption,createdAt:rec.createdAt});
-    res.json({ok:true});
-  } catch(e){res.status(500).json({error:e.message});}
-});
-app.get('/api/share-note/inbox', auth, async (req,res) => {
-  const shares=await dbFind(db.noteShares,{toUserId:req.user.id,status:'pending'},{createdAt:-1});
-  res.json(shares);
-});
-app.post('/api/share-note/:id/accept', auth, async (req,res) => {
-  try {
-    const share=await dbFindOne(db.noteShares,{_id:req.params.id,toUserId:req.user.id});
-    if(!share) return res.status(404).json({error:'لم تُعثر على المشاركة'});
-    const orig=share.originalMsg;
-    const newMsg={_id:uuidv4(),userId:req.user.id,username:req.user.username,text:orig.text,type:orig.type||'text',
-      fileUrl:orig.fileUrl,fileName:orig.fileName,fileMime:orig.fileMime,fileSize:orig.fileSize,
-      sharedFrom:share.fromUsername,sharedAt:new Date(),folderId:'shared',createdAt:new Date()};
-    await dbInsert(db.messages,newMsg);
-    await dbUpdate(db.noteShares,{_id:share._id},{$set:{status:'accepted'}});
-    emitToUser(req.user.id,'message:new',newMsg);
-    res.json({ok:true,message:newMsg});
-  } catch(e){res.status(500).json({error:e.message});}
-});
-app.post('/api/share-note/:id/decline', auth, async (req,res) => {
-  try {
-    await dbUpdate(db.noteShares,{_id:req.params.id,toUserId:req.user.id},{$set:{status:'declined'}});
-    res.json({ok:true});
-  } catch(e){res.status(500).json({error:e.message});}
 });
 
 // Delete own account
@@ -753,4 +721,103 @@ server.listen(PORT, () => {
   console.log(`✅ ProfNoteChat running on port ${PORT}`);
   console.log(`📦 Database: NeDB (embedded, fast)`);
   console.log(`⚡ Realtime: Socket.io`);
+});
+
+// ══ NOTE SHARING BETWEEN USERS ═══════════════════════════════
+// Search users by username (for sharing)
+app.get('/api/users/search', auth, async (req, res) => {
+  const { q } = req.query;
+  if (!q || q.trim().length < 2) return res.json([]);
+  const regex = new RegExp(q.trim(), 'i');
+  const users = await dbFind(db.users, { username: regex, _id: { $ne: req.user.id }, __config: { $exists: false } });
+  res.json(users.slice(0,10).map(u => ({ id: u._id, username: u.username, email: u.email })));
+});
+
+// Send a note to another user
+app.post('/api/share-note', auth, async (req, res) => {
+  try {
+    const { toUserId, messageId, message: customMsg } = req.body;
+    if (!toUserId || !messageId) return res.status(400).json({ error: 'بيانات ناقصة' });
+    const toUser = await dbFindOne(db.users, { _id: toUserId });
+    if (!toUser) return res.status(404).json({ error: 'المستخدم غير موجود' });
+    const origMsg = await dbFindOne(db.messages, { _id: messageId, userId: req.user.id });
+    if (!origMsg) return res.status(404).json({ error: 'الملاحظة غير موجودة' });
+    const shareRecord = {
+      _id: uuidv4(), fromUserId: req.user.id, fromUsername: req.user.username,
+      toUserId, messageId, originalMsg: origMsg,
+      customMsg: customMsg?.trim() || '', status: 'pending',
+      createdAt: new Date()
+    };
+    await dbInsert(db.noteShares, shareRecord);
+    // Notify recipient in real-time
+    emitToUser(toUserId, 'note:share:received', {
+      id: shareRecord._id, from: req.user.username,
+      msg: origMsg, customMsg: shareRecord.customMsg, createdAt: shareRecord.createdAt
+    });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get pending received note shares for current user
+app.get('/api/share-note/inbox', auth, async (req, res) => {
+  const shares = await dbFind(db.noteShares, { toUserId: req.user.id, status: 'pending' }, { createdAt: -1 });
+  res.json(shares);
+});
+
+// Accept a shared note (imports it into user's notes)
+app.post('/api/share-note/:id/accept', auth, async (req, res) => {
+  try {
+    const share = await dbFindOne(db.noteShares, { _id: req.params.id, toUserId: req.user.id });
+    if (!share) return res.status(404).json({ error: 'لم يُعثر على المشاركة' });
+    const orig = share.originalMsg;
+    // Create a copy of the note for the recipient
+    const newMsg = {
+      _id: uuidv4(), userId: req.user.id, username: req.user.username,
+      text: orig.text, type: orig.type || 'text',
+      fileUrl: orig.fileUrl, fileName: orig.fileName, fileMime: orig.fileMime, fileSize: orig.fileSize,
+      sharedFrom: share.fromUsername, sharedAt: new Date(),
+      folderId: 'shared', // goes into "Shared" folder
+      createdAt: new Date()
+    };
+    await dbInsert(db.messages, newMsg);
+    await dbUpdate(db.noteShares, { _id: share._id }, { $set: { status: 'accepted' } });
+    emitToUser(req.user.id, 'message:new', newMsg);
+    res.json({ ok: true, message: newMsg });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Decline a shared note
+app.post('/api/share-note/:id/decline', auth, async (req, res) => {
+  try {
+    const share = await dbFindOne(db.noteShares, { _id: req.params.id, toUserId: req.user.id });
+    if (!share) return res.status(404).json({ error: 'لم يُعثر على المشاركة' });
+    await dbUpdate(db.noteShares, { _id: share._id }, { $set: { status: 'declined' } });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get admin invite code (admin only, masked)
+app.get('/api/admin/invite-code', adminAuth, async (req, res) => {
+  res.json({ code: appConfig.adminInviteCode || '' });
+});
+
+// Generate new admin invite code
+app.post('/api/admin/invite-code/generate', adminAuth, async (req, res) => {
+  const code = Math.random().toString(36).slice(2,10).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+  appConfig.adminInviteCode = code;
+  dbRemove(db.users,{__config:true}).then(()=>dbInsert(db.users,{__config:true,...appConfig})).catch(()=>{});
+  res.json({ code });
+});
+
+// Check admin invite code validity (public, for registration)
+app.post('/api/check-admin-code', async (req, res) => {
+  const { code } = req.body;
+  const valid = code && appConfig.adminInviteCode && code.trim() === appConfig.adminInviteCode;
+  res.json({ valid: !!valid });
+});
+
+// Get pending users (not yet activated)
+app.get('/api/admin/pending-users', adminAuth, async (req, res) => {
+  const users = await dbFind(db.users, { active: false, __config: { $exists: false } }, { createdAt: -1 });
+  res.json(users.map(u => ({ id: u._id, username: u.username, email: u.email, createdAt: u.createdAt })));
 });
