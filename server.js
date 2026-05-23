@@ -88,32 +88,19 @@ const upload = { single: (field) => (req,res,next) => getUpload().single(field)(
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow all origins — Railway handles HTTPS, and we authenticate via JWT
-    callback(null, true);
-  },
+  origin: [
+    'https://mohamadysons.com',
+    'https://www.mohamadysons.com',
+    'http://localhost:3000',
+    /\.mohamadysons\.com$/,
+    // Allow extension
+    /^chrome-extension:/,
+    /^moz-extension:/
+  ],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
-
-// ══ STATIC FILE SERVING ══════════════════════════════════════════
-// Serve the frontend app from the same server
-app.use(express.static(path.join(__dirname, 'public')));
-// Also serve css, js from root if they exist there
-app.use(express.static(__dirname, {
-  index: false, // don't auto-serve index.html here
-  extensions: ['css', 'js'],
-}));
-// Serve index.html for any non-API route (SPA fallback)
-app.get(/^\/(?!api|uploads|share\/)/, (req, res) => {
-  const indexPath = path.join(__dirname, 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' });
-  }
-});
 
 // ══ HELPERS ═════════════════════════════════════════════════════
 const decodeFilename = name => {
@@ -181,8 +168,7 @@ const emitAll    = (event, data)         => io.to('global').emit(event, data);
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-// API health check
-app.get('/api/health', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
+app.get('/', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
 
 // ── Has-admin (public) ────────────────────────────────────────
 app.get('/api/has-admin', async (req, res) => {
