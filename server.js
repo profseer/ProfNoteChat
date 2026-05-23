@@ -87,15 +87,20 @@ function getUpload(){
 const upload = { single: (field) => (req,res,next) => getUpload().single(field)(req,res,next) };
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
+// Allow all origins — JWT handles auth security
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Serve the frontend static files (index.html, app.js, app.css, etc.)
-// This must come BEFORE the API routes to serve static assets,
-// but the SPA fallback must come AFTER all API routes.
-app.use(express.static(__dirname, {
-  index: false, // Never auto-serve index.html — we do it manually below
+// ══ STATIC FILES — serve frontend from same server ═══════════════
+// Serves index.html, app.js, app.css directly from project root
+app.use(express.static(path.join(__dirname), {
+  index: false, // we control when to serve index.html
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.css'))       res.setHeader('Content-Type', 'text/css');
+    else if (filePath.endsWith('.js'))   res.setHeader('Content-Type', 'application/javascript');
+    else if (filePath.endsWith('.html')) res.setHeader('Content-Type', 'text/html');
+  }
 }));
 
 // ══ HELPERS ═════════════════════════════════════════════════════
@@ -164,7 +169,8 @@ const emitAll    = (event, data)         => io.to('global').emit(event, data);
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-app.get('/', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
+// API root info
+app.get('/api', (req, res) => res.json({ status: 'ProfNoteChat API ✓', version: '2.0', realtime: true }));
 
 // ── Has-admin (public) ────────────────────────────────────────
 app.get('/api/has-admin', async (req, res) => {
@@ -744,18 +750,20 @@ function sharePageHTML(name, date, content) {
   return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ملاحظة - ProfNoteChat</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet"/><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Cairo',sans-serif;background:#f0f4ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{background:#fff;border-radius:24px;padding:36px;max-width:620px;width:100%;box-shadow:0 8px 40px rgba(79,124,255,.14)}.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e8edf8}.bic{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3a5fd4,#7c9fff);display:flex;align-items:center;justify-content:center;flex-shrink:0}.bnm{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#1a2040,#4f7cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.meta{font-size:.82rem;color:#8a95b4;margin-bottom:20px}.nt{font-size:1.05rem;line-height:1.75;color:#1a2040;font-weight:500;white-space:pre-wrap}.ft{font-size:.78rem;color:#9aa3be;text-align:center;padding-top:16px;border-top:1px solid #e8edf8;margin-top:24px}.cta{display:inline-block;margin-top:14px;padding:10px 22px;background:linear-gradient(135deg,#3a5fd4,#4f7cff);color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:.88rem}</style></head><body><div class="card"><div class="brand"><div class="bic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div><span class="bnm">ProfNoteChat</span></div><div class="meta">✍️ ${name} &nbsp;·&nbsp; 📅 ${date}</div><div>${content}</div><div class="ft">تمت المشاركة عبر ProfNoteChat<br><a href="https://mohamadysons.com/prof/notes/" class="cta">انشئ ملاحظاتك →</a></div></div></body></html>`;
 }
 
-// ══ SPA FALLBACK — must be LAST, after all API routes ════════
-// Only responds to GET requests for non-API, non-asset paths
-app.get('*', (req, res, next) => {
-  // Skip API routes and file uploads — they are handled above
-  if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/share/')) {
-    return next();
+// ══ SPA FALLBACK — serve index.html for all non-API GET routes ══
+// IMPORTANT: This must be the LAST route. Only handles GET requests.
+// POST/PUT/PATCH/DELETE to /api/* are handled above and never reach here.
+app.get('*', (req, res) => {
+  const p = req.path;
+  // Never intercept API or upload routes
+  if (p.startsWith('/api/') || p.startsWith('/uploads/') || p.startsWith('/share/')) {
+    return res.status(404).json({ error: 'Not found' });
   }
   const indexPath = path.join(__dirname, 'index.html');
   if (fs.existsSync(indexPath)) {
     res.sendFile(indexPath);
   } else {
-    res.json({ status: 'ProfNoteChat API ✓', realtime: true });
+    res.json({ status: 'ProfNoteChat API ✓', hint: 'Deploy index.html to the same folder as server.js' });
   }
 });
 
