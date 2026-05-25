@@ -87,12 +87,13 @@ function getUpload(){
 const upload = { single: (field) => (req,res,next) => getUpload().single(field)(req,res,next) };
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
-// Open CORS — JWT tokens on every protected route handle auth security
+// Open CORS — all security is enforced via JWT on protected routes
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Serve frontend files (index.html, app.js, app.css) from same directory
+// Serve frontend static files (index.html, app.js, app.css) from project root
+// index:false ensures only named files are served, POST routes are never intercepted
 app.use(express.static(path.join(__dirname), { index: false }));
 
 // ══ HELPERS ═════════════════════════════════════════════════════
@@ -161,8 +162,7 @@ const emitAll    = (event, data)         => io.to('global').emit(event, data);
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-// API root ping
-app.get('/api', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
+app.get('/api/ping', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
 
 // ── Has-admin (public) ────────────────────────────────────────
 app.get('/api/has-admin', async (req, res) => {
@@ -743,8 +743,10 @@ function sharePageHTML(name, date, content) {
 }
 
 // ══ SPA FALLBACK ════════════════════════════════════════════════
-// MUST be last. Only responds to GET. Never intercepts /api/* or /uploads/*.
+// MUST be the last route defined. Only intercepts GET requests.
+// POST /api/register and all other POST/PATCH/DELETE are never affected.
 app.get('*', (req, res) => {
+  // Let API, uploads, and share routes return 404 JSON if they reach here
   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/share/')) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -752,8 +754,7 @@ app.get('*', (req, res) => {
   if (fs.existsSync(idx)) {
     res.sendFile(idx);
   } else {
-    // No index.html deployed — return API info so the server still functions
-    res.json({ status: 'ProfNoteChat API ✓', note: 'Deploy index.html alongside server.js' });
+    res.json({ status: 'ProfNoteChat API ✓', version: '2.0' });
   }
 });
 
