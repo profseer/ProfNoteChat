@@ -87,22 +87,27 @@ function getUpload(){
 const upload = { single: (field) => (req,res,next) => getUpload().single(field)(req,res,next) };
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
-// IMPORTANT: Open CORS must be first — before any other middleware
-// The app uses JWT tokens for security, not origin-based restrictions
+
+// Trust Railway's reverse proxy (needed for correct IP, protocol detection)
+app.set('trust proxy', true);
+
+// Open CORS — set headers manually FIRST before any other middleware
+// This ensures ALL origins can reach the API, security is via JWT tokens
 app.use((req, res, next) => {
-  // Allow ALL origins — remove any host allowlist restriction
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+  res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(cors({ origin: true, credentials: true }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Serve frontend files from same directory as server.js
+// Serve frontend static files (index.html, app.js, app.css) from project root
 app.use(express.static(path.join(__dirname), { index: false }));
 
 // ══ HELPERS ═════════════════════════════════════════════════════
@@ -171,7 +176,12 @@ const emitAll    = (event, data)         => io.to('global').emit(event, data);
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-app.get('/api/ping', (req, res) => res.json({ ok: true, status: 'ProfNoteChat API ✓' }));
+app.get('/', (req, res) => {
+  // Serve index.html if it exists, otherwise return API info
+  const idx = path.join(__dirname, 'index.html');
+  if (fs.existsSync(idx)) return res.sendFile(idx);
+  res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' });
+});
 
 // ── Has-admin (public) ────────────────────────────────────────
 app.get('/api/has-admin', async (req, res) => {
@@ -751,14 +761,16 @@ function sharePageHTML(name, date, content) {
   return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ملاحظة - ProfNoteChat</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet"/><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Cairo',sans-serif;background:#f0f4ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{background:#fff;border-radius:24px;padding:36px;max-width:620px;width:100%;box-shadow:0 8px 40px rgba(79,124,255,.14)}.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e8edf8}.bic{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3a5fd4,#7c9fff);display:flex;align-items:center;justify-content:center;flex-shrink:0}.bnm{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#1a2040,#4f7cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.meta{font-size:.82rem;color:#8a95b4;margin-bottom:20px}.nt{font-size:1.05rem;line-height:1.75;color:#1a2040;font-weight:500;white-space:pre-wrap}.ft{font-size:.78rem;color:#9aa3be;text-align:center;padding-top:16px;border-top:1px solid #e8edf8;margin-top:24px}.cta{display:inline-block;margin-top:14px;padding:10px 22px;background:linear-gradient(135deg,#3a5fd4,#4f7cff);color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:.88rem}</style></head><body><div class="card"><div class="brand"><div class="bic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div><span class="bnm">ProfNoteChat</span></div><div class="meta">✍️ ${name} &nbsp;·&nbsp; 📅 ${date}</div><div>${content}</div><div class="ft">تمت المشاركة عبر ProfNoteChat<br><a href="https://mohamadysons.com/prof/notes/" class="cta">انشئ ملاحظاتك →</a></div></div></body></html>`;
 }
 
-// SPA fallback — last route, GET only, never intercepts /api/* POST routes
+// ══ SPA FALLBACK ═════════════════════════════════════════════
+// Serves index.html for all non-API GET requests (React/SPA routing)
+// Must be LAST — never intercepts POST /api/register or any API route
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/share/')) {
     return res.status(404).json({ error: 'Not found' });
   }
   const idx = path.join(__dirname, 'index.html');
   if (fs.existsSync(idx)) res.sendFile(idx);
-  else res.json({ ok: true, status: 'ProfNoteChat API ✓' });
+  else res.json({ status: 'ProfNoteChat API ✓' });
 });
 
 // ══ START ═════════════════════════════════════════════════════
