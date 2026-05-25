@@ -87,12 +87,12 @@ function getUpload(){
 const upload = { single: (field) => (req,res,next) => getUpload().single(field)(req,res,next) };
 
 // ══ MIDDLEWARE ══════════════════════════════════════════════════
-// Use open CORS — security is enforced by JWT tokens on all protected routes
+// Open CORS — JWT tokens on every protected route handle auth security
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Serve static frontend files from the same directory as server.js
+// Serve frontend files (index.html, app.js, app.css) from same directory
 app.use(express.static(path.join(__dirname), { index: false }));
 
 // ══ HELPERS ═════════════════════════════════════════════════════
@@ -161,7 +161,8 @@ const emitAll    = (event, data)         => io.to('global').emit(event, data);
 // ROUTES
 // ══════════════════════════════════════════════════════════════
 
-app.get('/', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
+// API root ping
+app.get('/api', (req, res) => res.json({ status: 'ProfNoteChat API ✓', realtime: true, db: 'NeDB' }));
 
 // ── Has-admin (public) ────────────────────────────────────────
 app.get('/api/has-admin', async (req, res) => {
@@ -510,196 +511,50 @@ app.get('/api/admin/pending-users', adminAuth, async (req,res) => {
 });
 
 /* ── NOTE SHARING BETWEEN USERS ────────────────────── */
-
-// Search users by username — min 1 char, only active users, exclude self
 app.get('/api/users/search', auth, async (req,res) => {
-  try {
-    const { q } = req.query;
-    if (!q || !q.trim()) return res.json([]);
-    // Safe regex escape
-    const escaped = q.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-    const regex = new RegExp(escaped, 'i');
-    const users = await dbFind(db.users, {
-      username: regex,
-      _id: { $ne: req.user.id },   // exclude self
-      __config: { $exists: false }, // exclude config docs
-      active: true                  // only active users
-    });
-    res.json(users.slice(0, 10).map(u => ({
-      id: u._id,
-      username: u.username,
-      email: u.email
-    })));
-  } catch(e) { res.status(500).json({ error: e.message }); }
+  const { q } = req.query;
+  if(!q||q.trim().length<2) return res.json([]);
+  const regex=new RegExp(q.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
+  const users=await dbFind(db.users,{username:regex,_id:{$ne:req.user.id},__config:{$exists:false}});
+  res.json(users.slice(0,8).map(u=>({id:u._id,username:u.username,email:u.email})));
 });
-
-// Send a note to another user
-app.post('/api/share-note', auth, async (req, res) => {
+app.post('/api/share-note', auth, async (req,res) => {
   try {
     const { toUserId, messageId, caption } = req.body;
-
-    // Validate required fields
-    if (!toUserId || !messageId)
-      return res.status(400).json({ error: 'toUserId و messageId مطلوبان' });
-
-    // Cannot share with yourself
-    if (toUserId === req.user.id)
-      return res.status(400).json({ error: 'لا يمكنك مشاركة ملاحظة مع نفسك' });
-
-    // Verify recipient exists and is active
-    const toUser = await dbFindOne(db.users, { _id: toUserId, active: true });
-    if (!toUser) return res.status(404).json({ error: 'المستخدم غير موجود أو غير نشط' });
-
-    // Find the message — allow sharing any message the user owns
-    const origMsg = await dbFindOne(db.messages, {
-      _id: messageId,
-      userId: req.user.id  // only own messages
-    });
-    if (!origMsg) return res.status(404).json({ error: 'الملاحظة غير موجودة أو لا تملك صلاحية مشاركتها' });
-
-    // Prevent duplicate pending shares of the same note to same user
-    const existing = await dbFindOne(db.noteShares, {
-      fromUserId: req.user.id,
-      toUserId,
-      messageId,
-      status: 'pending'
-    });
-    if (existing) return res.status(409).json({ error: 'تم إرسال هذه الملاحظة لهذا المستخدم بالفعل وهي في انتظار القبول' });
-
-    const rec = {
-      _id: uuidv4(),
-      fromUserId: req.user.id,
-      fromUsername: req.user.username,
-      toUserId,
-      messageId,
-      originalMsg: origMsg,       // snapshot of the message at share time
-      caption: (caption || '').trim(),
-      status: 'pending',          // pending → accepted | declined | revoked
-      createdAt: new Date()
-    };
-    await dbInsert(db.noteShares, rec);
-
-    // Notify recipient in real-time via Socket.io
-    emitToUser(toUserId, 'note:share:received', {
-      id: rec._id,
-      from: req.user.username,
-      msg: origMsg,
-      caption: rec.caption,
-      createdAt: rec.createdAt
-    });
-
-    res.json({ ok: true, shareId: rec._id });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    if(!toUserId||!messageId) return res.status(400).json({error:'بيانات ناقصة'});
+    const toUser=await dbFindOne(db.users,{_id:toUserId});
+    if(!toUser) return res.status(404).json({error:'المستخدم غير موجود'});
+    const origMsg=await dbFindOne(db.messages,{_id:messageId,userId:req.user.id});
+    if(!origMsg) return res.status(404).json({error:'الملاحظة غير موجودة'});
+    const rec={_id:uuidv4(),fromUserId:req.user.id,fromUsername:req.user.username,toUserId,messageId,originalMsg:origMsg,caption:caption?.trim()||'',status:'pending',createdAt:new Date()};
+    await dbInsert(db.noteShares,rec);
+    emitToUser(toUserId,'note:share:received',{id:rec._id,from:req.user.username,msg:origMsg,caption:rec.caption,createdAt:rec.createdAt});
+    res.json({ok:true});
+  } catch(e){res.status(500).json({error:e.message});}
 });
-
-// Get pending received shares (inbox)
-app.get('/api/share-note/inbox', auth, async (req, res) => {
-  try {
-    const shares = await dbFind(
-      db.noteShares,
-      { toUserId: req.user.id, status: 'pending' },
-      { createdAt: -1 }
-    );
-    res.json(shares);
-  } catch(e) { res.status(500).json({ error: e.message }); }
+app.get('/api/share-note/inbox', auth, async (req,res) => {
+  const shares=await dbFind(db.noteShares,{toUserId:req.user.id,status:'pending'},{createdAt:-1});
+  res.json(shares);
 });
-
-// Get shares I sent (outbox) — for revocation UI
-app.get('/api/share-note/outbox', auth, async (req, res) => {
+app.post('/api/share-note/:id/accept', auth, async (req,res) => {
   try {
-    const shares = await dbFind(
-      db.noteShares,
-      { fromUserId: req.user.id, status: 'pending' },
-      { createdAt: -1 }
-    );
-    res.json(shares);
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    const share=await dbFindOne(db.noteShares,{_id:req.params.id,toUserId:req.user.id});
+    if(!share) return res.status(404).json({error:'لم تُعثر على المشاركة'});
+    const orig=share.originalMsg;
+    const newMsg={_id:uuidv4(),userId:req.user.id,username:req.user.username,text:orig.text,type:orig.type||'text',
+      fileUrl:orig.fileUrl,fileName:orig.fileName,fileMime:orig.fileMime,fileSize:orig.fileSize,
+      sharedFrom:share.fromUsername,sharedAt:new Date(),folderId:'shared',createdAt:new Date()};
+    await dbInsert(db.messages,newMsg);
+    await dbUpdate(db.noteShares,{_id:share._id},{$set:{status:'accepted'}});
+    emitToUser(req.user.id,'message:new',newMsg);
+    res.json({ok:true,message:newMsg});
+  } catch(e){res.status(500).json({error:e.message});}
 });
-
-// Accept a shared note — creates a copy in the recipient's messages
-app.post('/api/share-note/:id/accept', auth, async (req, res) => {
+app.post('/api/share-note/:id/decline', auth, async (req,res) => {
   try {
-    const share = await dbFindOne(db.noteShares, {
-      _id: req.params.id,
-      toUserId: req.user.id,
-      status: 'pending'  // can only accept pending shares
-    });
-    if (!share) return res.status(404).json({ error: 'المشاركة غير موجودة أو تمت معالجتها بالفعل' });
-
-    const orig = share.originalMsg;
-
-    // Create a copy of the note owned by the recipient
-    // Recipients can view but NOT edit/delete the original — this is their own copy
-    const newMsg = {
-      _id: uuidv4(),
-      userId: req.user.id,
-      username: req.user.username,
-      text: orig.text || '',
-      type: orig.type || 'text',
-      fileUrl: orig.fileUrl || null,
-      fileName: orig.fileName || null,
-      fileMime: orig.fileMime || null,
-      fileSize: orig.fileSize || null,
-      // Metadata marking this as a shared note (view-only origin info)
-      sharedFrom: share.fromUsername,
-      sharedFromUserId: share.fromUserId,
-      sharedAt: new Date(),
-      originalShareId: share._id,
-      // Store in a virtual "shared" folder for organization
-      folderId: 'shared',
-      createdAt: new Date()
-    };
-    await dbInsert(db.messages, newMsg);
-
-    // Mark share as accepted
-    await dbUpdate(db.noteShares, { _id: share._id }, { $set: { status: 'accepted', acceptedAt: new Date() } });
-
-    // Push the new message to the recipient in real-time
-    emitToUser(req.user.id, 'message:new', newMsg);
-
-    // Optionally notify sender that note was accepted
-    emitToUser(share.fromUserId, 'note:share:accepted', {
-      shareId: share._id,
-      byUsername: req.user.username,
-      messageId: share.messageId
-    });
-
-    res.json({ ok: true, message: newMsg });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Decline a shared note
-app.post('/api/share-note/:id/decline', auth, async (req, res) => {
-  try {
-    const share = await dbFindOne(db.noteShares, {
-      _id: req.params.id,
-      toUserId: req.user.id,
-      status: 'pending'
-    });
-    if (!share) return res.status(404).json({ error: 'المشاركة غير موجودة' });
-
-    await dbUpdate(db.noteShares, { _id: share._id }, { $set: { status: 'declined', declinedAt: new Date() } });
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Revoke a share (sender cancels before recipient accepts)
-app.post('/api/share-note/:id/revoke', auth, async (req, res) => {
-  try {
-    const share = await dbFindOne(db.noteShares, {
-      _id: req.params.id,
-      fromUserId: req.user.id,   // only sender can revoke
-      status: 'pending'
-    });
-    if (!share) return res.status(404).json({ error: 'المشاركة غير موجودة أو تمت معالجتها بالفعل' });
-
-    await dbUpdate(db.noteShares, { _id: share._id }, { $set: { status: 'revoked', revokedAt: new Date() } });
-
-    // Notify recipient that share was revoked
-    emitToUser(share.toUserId, 'note:share:revoked', { shareId: share._id });
-
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    await dbUpdate(db.noteShares,{_id:req.params.id,toUserId:req.user.id},{$set:{status:'declined'}});
+    res.json({ok:true});
+  } catch(e){res.status(500).json({error:e.message});}
 });
 
 // Delete own account
@@ -887,15 +742,19 @@ function sharePageHTML(name, date, content) {
   return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ملاحظة - ProfNoteChat</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet"/><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Cairo',sans-serif;background:#f0f4ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.card{background:#fff;border-radius:24px;padding:36px;max-width:620px;width:100%;box-shadow:0 8px 40px rgba(79,124,255,.14)}.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e8edf8}.bic{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3a5fd4,#7c9fff);display:flex;align-items:center;justify-content:center;flex-shrink:0}.bnm{font-size:1.1rem;font-weight:900;background:linear-gradient(135deg,#1a2040,#4f7cff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.meta{font-size:.82rem;color:#8a95b4;margin-bottom:20px}.nt{font-size:1.05rem;line-height:1.75;color:#1a2040;font-weight:500;white-space:pre-wrap}.ft{font-size:.78rem;color:#9aa3be;text-align:center;padding-top:16px;border-top:1px solid #e8edf8;margin-top:24px}.cta{display:inline-block;margin-top:14px;padding:10px 22px;background:linear-gradient(135deg,#3a5fd4,#4f7cff);color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:.88rem}</style></head><body><div class="card"><div class="brand"><div class="bic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div><span class="bnm">ProfNoteChat</span></div><div class="meta">✍️ ${name} &nbsp;·&nbsp; 📅 ${date}</div><div>${content}</div><div class="ft">تمت المشاركة عبر ProfNoteChat<br><a href="https://mohamadysons.com/prof/notes/" class="cta">انشئ ملاحظاتك →</a></div></div></body></html>`;
 }
 
-// ══ SPA FALLBACK — serve index.html for all non-API GET routes ══
-// MUST be the last route. Only intercepts GET — never POST/PATCH/DELETE.
+// ══ SPA FALLBACK ════════════════════════════════════════════════
+// MUST be last. Only responds to GET. Never intercepts /api/* or /uploads/*.
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/share/')) {
     return res.status(404).json({ error: 'Not found' });
   }
   const idx = path.join(__dirname, 'index.html');
-  if (fs.existsSync(idx)) res.sendFile(idx);
-  else res.json({ status: 'ProfNoteChat API ✓', note: 'Place index.html next to server.js' });
+  if (fs.existsSync(idx)) {
+    res.sendFile(idx);
+  } else {
+    // No index.html deployed — return API info so the server still functions
+    res.json({ status: 'ProfNoteChat API ✓', note: 'Deploy index.html alongside server.js' });
+  }
 });
 
 // ══ START ═════════════════════════════════════════════════════
